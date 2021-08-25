@@ -10,7 +10,8 @@ from urllib.parse import urlparse
 
 from . import __version__
 from .types import Status, DataType, DeployMode
-from .check import check_pass_param, is_legal_host, is_legal_port, is_legal_index_metric_type, is_legal_binary_index_metric_type
+from .check import check_pass_param, is_legal_host, is_legal_port, is_legal_index_metric_type, \
+    is_legal_binary_index_metric_type
 from .pool import ConnectionPool, SingleConnectionPool, SingletonThreadPool
 from .exceptions import BaseException, ParamError, DeprecatedError
 
@@ -58,7 +59,7 @@ def retry_on_rpc_failure(retry_times=10, wait=1):
                         raise e
                     if counter >= retry_times:
                         if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
-                            raise BaseException(1, "rpc timeout")
+                            raise BaseException(1, "retry_on_rpc_failure, rpc timeout")
                         raise e
                     time.sleep(wait)
                     self._update_connection_pool()
@@ -131,21 +132,20 @@ class Milvus:
         self._deploy_mode = DeployMode.Distributed
 
     @check_connect
-    def _wait_for_healthy(self, timeout=30, retry=10):
+    def _wait_for_healthy(self, timeout=3, retry=10):
         with self._connection() as handler:
-            start_time = time.time()
             while retry > 0:
-                if (time.time() - start_time > timeout):
-                    break
+                is_except = False
                 try:
                     status = handler.fake_register_link(timeout)
                     if status.error_code == 0:
                         self._deploy_mode = status.reason
                         return
                 except:
-                    pass
+                    is_except = True
                 finally:
-                    time.sleep(1)
+                    sleep_time = 1 if is_except else timeout
+                    time.sleep(sleep_time)
                     retry -= 1
             raise Exception("server is not healthy, please try again later")
 
@@ -999,7 +999,8 @@ class Milvus:
 
     @retry_on_rpc_failure(retry_times=10, wait=1)
     @check_connect
-    def search_with_expression(self, collection_name, data, anns_field, param, limit, expression=None, partition_names=None,
+    def search_with_expression(self, collection_name, data, anns_field, param, limit, expression=None,
+                               partition_names=None,
                                output_fields=None, timeout=None, **kwargs):
         """
         Searches a collection based on the given expression and returns query results.
@@ -1050,7 +1051,8 @@ class Milvus:
         )
         with self._connection() as handler:
             kwargs["_deploy_mode"] = self._deploy_mode
-            return handler.search_with_expression(collection_name, data, anns_field, param, limit, expression, partition_names, output_fields, timeout, **kwargs)
+            return handler.search_with_expression(collection_name, data, anns_field, param, limit, expression,
+                                                  partition_names, output_fields, timeout, **kwargs)
 
     @retry_on_rpc_failure(retry_times=10, wait=1)
     @check_connect
