@@ -43,7 +43,7 @@ def check_connect(func):
     return inner
 
 
-def retry_on_rpc_failure(retry_times=10, wait=1):
+def retry_on_rpc_failure(retry_times=10, wait=1, retry_on_deadline=True):
     def wrapper(func):
         @functools.wraps(func)
         def handler(self, *args, **kwargs):
@@ -56,6 +56,8 @@ def retry_on_rpc_failure(retry_times=10, wait=1):
                     # UNAVAILABLE means that the service is not reachable currently
                     # Reference: https://grpc.github.io/grpc/python/grpc.html#grpc-status-code
                     if e.code() != grpc.StatusCode.DEADLINE_EXCEEDED and e.code() != grpc.StatusCode.UNAVAILABLE:
+                        raise e
+                    if not retry_on_deadline and e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
                         raise e
                     if counter >= retry_times:
                         if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
@@ -164,6 +166,8 @@ class Milvus:
         if self._pool:
             return self._pool.fetch()
 
+        raise Exception("Connection is already closed")
+
     def _update_connection_pool(self, channel=None):
         self._pool = None
         if self._pool_type == "QueuePool":
@@ -193,11 +197,12 @@ class Milvus:
         if self._pool:
             self._pool = None
             return
+
         raise Exception("connection was already closed!")
 
     @retry_on_rpc_failure(retry_times=10, wait=1)
     @check_connect
-    def create_collection(self, collection_name, fields, timeout=None, **kwargs):
+    def create_collection(self, collection_name, fields, shards_num=2, timeout=None, **kwargs):
         """
         Creates a collection.
 
@@ -217,6 +222,10 @@ class Milvus:
                 ],
             "auto_id": True}`
 
+        :param shards_num: How wide to scale collection. Corresponds to how many active datanodes
+                        can be used on insert.
+        :type shards_num: int
+
         :param timeout: An optional duration of time in seconds to allow for the RPC. When timeout
                         is set to None, client waits until server response or error occur.
         :type  timeout: float
@@ -230,9 +239,9 @@ class Milvus:
             BaseException: If the return result from server is not ok
         """
         with self._connection() as handler:
-            return handler.create_collection(collection_name, fields, timeout, **kwargs)
+            return handler.create_collection(collection_name, fields, shards_num=shards_num, timeout=timeout, **kwargs)
 
-    @retry_on_rpc_failure(retry_times=10, wait=1)
+    @retry_on_rpc_failure(retry_times=10, wait=1, retry_on_deadline=False)
     @check_connect
     def drop_collection(self, collection_name, timeout=None):
         """
@@ -856,6 +865,39 @@ class Milvus:
 
     @retry_on_rpc_failure(retry_times=10, wait=1)
     @check_connect
+    def delete(self, collection_name, expr, partition_name=None, timeout=None, **kwargs):
+        """
+        Delete entities with an expression condition.
+        And return results to show which primary key is deleted successfully
+
+        :param collection_name: Name of the collection to delete entities from
+        :type  collection_name: str
+
+        :param expr: The query expression
+        :type  expr: str
+
+        :param partition_name: Name of partitions that contain entities
+        :type  partition_name: str
+
+        :param timeout: An optional duration of time in seconds to allow for the RPC. When timeout
+                        is set to None, client waits until server response or error occur
+        :type  timeout: float
+
+        :return: list of ids of the deleted vectors.
+        :rtype: list
+
+        :raises:
+            RpcError: If gRPC encounter an error
+            ParamError: If parameters are invalid
+            BaseException: If the return result from server is not ok
+        """
+        check_pass_param(collection_name=collection_name)
+        print(collection_name, expr, partition_name)
+        with self._connection() as handler:
+            return handler.delete(collection_name, expr, partition_name, timeout, **kwargs)
+
+    @retry_on_rpc_failure(retry_times=10, wait=1)
+    @check_connect
     def flush(self, collection_names=None, timeout=None, **kwargs):
         """
         Internally, Milvus organizes data into segments, and indexes are built in a per-segment manner.
@@ -1076,16 +1118,19 @@ class Milvus:
         or
         `{"bin_vectors": [b'\x94', b'N', ... b'\xca']}`
 
-        :param params: parameters, currently only support "metric_type", default value is "L2"
-                       extra parameter for "L2" distance: "sqrt", true or false, default is false
-                       extra parameter for "HAMMING" and "TANIMOTO": "dim", set this value if dimension is not a multiple of 8, otherwise the dimension will be calculted by list length
+        :param params: key-value pair parameters
+                       Key: "metric_type"/"metric"    Value: "L2"/"IP"/"HAMMING"/"TANIMOTO", default is "L2",
+                       Key: "sqrt"    Value: true or false, default is false    Only for "L2" distance
+                       Key: "dim"     Value: set this value if dimension is not a multiple of 8,
+                                             otherwise the dimension will be calculted by list length,
+                                             only for "HAMMING" and "TANIMOTO"
         :type  params: dict
-            There are examples of supported metric_type:
-                `{"metric_type": "L2"}`
+            Examples of supported metric_type:
+                `{"metric_type": "L2", "sqrt": true}`
                 `{"metric_type": "IP"}`
-                `{"metric_type": "HAMMING"}`
+                `{"metric_type": "HAMMING", "dim": 17}`
                 `{"metric_type": "TANIMOTO"}`
-            Note: "L2", "IP", "HAMMING", "TANIMOTO" are case insensitive
+            Note: metric type are case insensitive
 
         :return: 2-d array distances
         :rtype: list[list[int]] for "HAMMING" or list[list[float]] for others

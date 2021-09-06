@@ -2,11 +2,12 @@ import logging
 import unittest
 import pytest
 from utils import *
-from pymilvus_orm import Collection, Partition
+from pymilvus import Collection, Partition
 
 LOGGER = logging.getLogger(__name__)
 
 
+@pytest.mark.skip("Connect with the real server")
 class TestPartition:
     @pytest.fixture(scope="function")
     def collection_name(self):

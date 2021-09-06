@@ -361,8 +361,8 @@ class GrpcHandler:
         return self._uri
 
     @error_handler()
-    def create_collection(self, collection_name, fields, timeout=None, **kwargs):
-        request = Prepare.create_collection_request(collection_name, fields, **kwargs)
+    def create_collection(self, collection_name, fields, shards_num=2, timeout=None, **kwargs):
+        request = Prepare.create_collection_request(collection_name, fields, shards_num=shards_num, **kwargs)
 
         # TODO(wxyu): In grpcio==1.37.1, `wait_for_ready` is an EXPERIMENTAL argument, while it's not supported in
         #  grpcio-testing==1.37.1 . So that we remove the argument in order to using grpc-testing in unittests.
@@ -531,6 +531,22 @@ class GrpcHandler:
                 return MutationFuture(rf, cb)
 
             response = rf.result()
+            if response.status.error_code == 0:
+                return MutationResult(response)
+
+            raise BaseException(response.status.error_code, response.status.reason)
+        except Exception as err:
+            if kwargs.get("_async", False):
+                return MutationFuture(None, None, err)
+            raise err
+
+    @error_handler(None)
+    def delete(self, collection_name, expression, partition_name=None, timeout=None, **kwargs):
+        try:
+            req = Prepare.delete_request(collection_name, partition_name, expression)
+            future = self._stub.Delete.future(req, wait_for_ready=True, timeout=timeout)
+
+            response = future.result()
             if response.status.error_code == 0:
                 return MutationResult(response)
 
@@ -723,7 +739,7 @@ class GrpcHandler:
             def _check():
                 if kwargs.get("sync", True):
                     index_success, fail_reason = self.wait_for_creating_index(collection_name=collection_name,
-                                                                              field_name=field_name)
+                                                                              field_name=field_name, timeout=timeout)
                     if not index_success:
                         raise BaseException(Status.UNEXPECTED_ERROR, fail_reason)
 
@@ -741,7 +757,7 @@ class GrpcHandler:
 
         if kwargs.get("sync", True):
             index_success, fail_reason = self.wait_for_creating_index(collection_name=collection_name,
-                                                                      field_name=field_name)
+                                                                      field_name=field_name, timeout=timeout)
             if not index_success:
                 raise BaseException(Status.UNEXPECTED_ERROR, fail_reason)
 
@@ -786,6 +802,7 @@ class GrpcHandler:
 
     @error_handler(False)
     def wait_for_creating_index(self, collection_name, field_name, timeout=None):
+        start = time.time()
         while True:
             time.sleep(0.5)
             state, fail_reason = self.get_index_state(collection_name, field_name, timeout)
@@ -793,6 +810,10 @@ class GrpcHandler:
                 return True, fail_reason
             if state == IndexState.Failed:
                 return False, fail_reason
+            end = time.time()
+            if timeout is not None:
+                if end - start > timeout:
+                    raise BaseException(1, "CreateIndex Timeout")
 
     @error_handler()
     def load_collection(self, db_name, collection_name, timeout=None, **kwargs):
@@ -1158,6 +1179,7 @@ class GrpcHandler:
         params = params or {"metric": config.CALC_DIST_METRIC}
         if "metric_type" in params.keys():
             params["metric"] = params["metric_type"]
+            params.pop("metric_type")
 
         req = Prepare.calc_distance_request(vectors_left, vectors_right, params)
         future = self._stub.CalcDistance.future(req, wait_for_ready=True, timeout=timeout)

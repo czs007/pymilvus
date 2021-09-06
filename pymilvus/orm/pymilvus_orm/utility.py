@@ -243,6 +243,33 @@ def has_partition(collection_name, partition_name, using="default"):
     return _get_connection(using).has_partition(collection_name, partition_name)
 
 
+def drop_collection(collection_name, timeout=None, using="default"):
+    """
+    Drop a collection by name
+
+    :param collection_name: A string representing the collection to be deleted
+    :type  collection_name: str
+    :param timeout: An optional duration of time in seconds to allow for the RPC. When timeout
+                    is set to None, client waits until server response or error occur.
+    :type  timeout: float
+
+    :example:
+        >>> from pymilvus import Collection, FieldSchema, CollectionSchema, DataType, connections, utility
+        >>> connections.connect(alias="default")
+        >>> schema = CollectionSchema(fields=[
+        ...     FieldSchema("int64", DataType.INT64, description="int64", is_primary=True),
+        ...     FieldSchema("float_vector", DataType.FLOAT_VECTOR, is_primary=False, dim=128),
+        ... ])
+        >>> collection = Collection(name="drop_collection_test", schema=schema)
+        >>> utility.has_collection("drop_collection_test")
+        >>> True
+        >>> utility.drop_collection("drop_collection_test")
+        >>> utility.has_collection("drop_collection_test")
+        >>> False
+    """
+    return _get_connection(using).drop_collection(collection_name, timeout)
+
+
 def list_collections(timeout=None, using="default") -> list:
     """
     Returns a list of all collection names.
@@ -287,16 +314,19 @@ def calc_distance(vectors_left, vectors_right, params=None, timeout=None, using=
     or
     `{"bin_vectors": [b'\x94', b'N', ... b'\xca']}`
 
-    :param params: parameters, currently only support "metric_type", default value is "L2"
-                   extra parameter for "L2" distance: "sqrt", true or false, default is false
-                   extra parameter for "HAMMING" and "TANIMOTO": "dim", set this value if dimension is not a multiple of 8, otherwise the dimension will be calculted by list length
-    :type  params: dict
-        There are examples of supported metric_type:
-            `{"metric_type": "L2"}`
-            `{"metric_type": "IP"}`
-            `{"metric_type": "HAMMING"}`
-            `{"metric_type": "TANIMOTO"}`
-        Note: "L2", "IP", "HAMMING", "TANIMOTO" are case insensitive
+    :param params: key-value pair parameters
+                       Key: "metric_type"/"metric"    Value: "L2"/"IP"/"HAMMING"/"TANIMOTO", default is "L2",
+                       Key: "sqrt"    Value: true or false, default is false    Only for "L2" distance
+                       Key: "dim"     Value: set this value if dimension is not a multiple of 8,
+                                             otherwise the dimension will be calculted by list length,
+                                             only for "HAMMING" and "TANIMOTO"
+        :type  params: dict
+            Examples of supported metric_type:
+                `{"metric_type": "L2", "sqrt": true}`
+                `{"metric_type": "IP"}`
+                `{"metric_type": "HAMMING", "dim": 17}`
+                `{"metric_type": "TANIMOTO"}`
+            Note: metric type are case insensitive
 
     :return: 2-d array distances
     :rtype: list[list[int]] for "HAMMING" or list[list[float]] for others

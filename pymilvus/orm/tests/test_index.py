@@ -1,11 +1,12 @@
 import logging
 import pytest
 from utils import *
-from pymilvus_orm import Collection, Index
+from pymilvus import Collection, Index, connections, Connections
 
 LOGGER = logging.getLogger(__name__)
 
 
+@pytest.mark.skip("Connect with the real server")
 class TestIndex:
     @pytest.fixture(scope="function")
     def name(self):
@@ -36,7 +37,7 @@ class TestIndex:
 
     @pytest.fixture(scope="function")
     def index(self, name, field_name, collection_name, schema, get_simple_index):
-        # from pymilvus_orm.collection import Collection
+        connections.connect()
         collection = Collection(collection_name, schema=schema)
         return Index(collection, field_name, get_simple_index)
 

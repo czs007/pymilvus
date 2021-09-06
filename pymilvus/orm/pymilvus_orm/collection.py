@@ -75,7 +75,7 @@ class Collection:
 
         """
 
-    def __init__(self, name, schema=None, using="default", **kwargs):
+    def __init__(self, name, schema=None, using="default", shards_num=2, **kwargs):
         """
         Constructs a collection by name, schema and other parameters.
         Connection information is contained in kwargs.
@@ -88,6 +88,10 @@ class Collection:
 
         :param using: Milvus link of create collection
         :type using: str
+
+        :param shards_num: How wide to scale collection. Corresponds to how many active datanodes
+                        can be used on insert.
+        :type shards_num: int
 
         :example:
             >>> from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType
@@ -111,6 +115,7 @@ class Collection:
         """
         self._name = name
         self._using = using
+        self._shards_num = shards_num
         self._kwargs = kwargs
         conn = self._get_connection()
         has = conn.has_collection(self._name)
@@ -131,7 +136,7 @@ class Collection:
                 raise SchemaNotReadyException(0, ExceptionsMessage.NoSchema)
             if isinstance(schema, CollectionSchema):
                 _check_schema(schema)
-                conn.create_collection(self._name, fields=schema.to_dict())
+                conn.create_collection(self._name, fields=schema.to_dict(), shards_num=self._shards_num)
                 self._schema = schema
             else:
                 raise SchemaNotReadyException(0, ExceptionsMessage.SchemaType)
@@ -515,6 +520,62 @@ class Collection:
         conn = self._get_connection()
         entities = Prepare.prepare_insert_data(data, self._schema)
         res = conn.insert(collection_name=self._name, entities=entities, ids=None,
+                          partition_name=partition_name, timeout=timeout, **kwargs)
+        if kwargs.get("_async", False):
+            return MutationFuture(res)
+        return MutationResult(res)
+
+    def delete(self, expr, partition_name=None, timeout=None, **kwargs):
+        """
+        Delete entities with an expression condition.
+        And return results to show which primary key is deleted successfully
+
+        :param expr: The query expression
+        :type  expr: str
+
+        :param partition_name: Name of partitions that contain entities
+        :type  partition_name: str
+
+        :param timeout: An optional duration of time in seconds to allow for the RPC. When timeout
+                        is set to None, client waits until server response or error occur
+        :type  timeout: float
+
+        :return: list of ids of the deleted vectors.
+        :rtype: list
+
+        :raises:
+            RpcError: If gRPC encounter an error
+            ParamError: If parameters are invalid
+            BaseException: If the return result from server is not ok
+
+        :example:
+            >>> from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType
+            >>> import random
+            >>> connections.connect()
+            >>> schema = CollectionSchema([
+            ...     FieldSchema("film_id", DataType.INT64, is_primary=True),
+            ...     FieldSchema("film_date", DataType.INT64),
+            ...     FieldSchema("films", dtype=DataType.FLOAT_VECTOR, dim=2)
+            ... ])
+            >>> collection = Collection("test_collection_query", schema)
+            >>> # insert
+            >>> data = [
+            ...     [i for i in range(10)],
+            ...     [i + 2000 for i in range(10)],
+            ...     [[random.random() for _ in range(2)] for _ in range(10)],
+            ... ]
+            >>> collection.insert(data)
+            >>> collection.num_entities
+
+            >>> expr = "film_id in [ 0, 1 ]"
+            >>> res = collection.delete(expr)
+            >>> assert len(res) == 2
+            >>> print(f"- Deleted entities: {res}")
+            - Delete results: [0, 1]
+        """
+
+        conn = self._get_connection()
+        res = conn.delete(collection_name=self._name, expr=expr,
                           partition_name=partition_name, timeout=timeout, **kwargs)
         if kwargs.get("_async", False):
             return MutationFuture(res)

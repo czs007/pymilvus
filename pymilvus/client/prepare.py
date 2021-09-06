@@ -23,7 +23,7 @@ from .types import RangeType, DataType, MetricType, IndexType, PlaceholderType, 
 class Prepare:
 
     @classmethod
-    def create_collection_request(cls, collection_name, fields, **kwargs):
+    def create_collection_request(cls, collection_name, fields, shards_num=2, **kwargs):
         """
         :type param: dict
         :param param: (Required)
@@ -45,6 +45,7 @@ class Prepare:
 
         if "fields" not in fields:
             raise ParamError("Param fields must contains key 'fields'")
+
 
         schema = schema_types.CollectionSchema(name=collection_name)
 
@@ -125,7 +126,7 @@ class Prepare:
                 schema.fields.append(field_schema)
 
         return milvus_types.CreateCollectionRequest(collection_name=collection_name,
-                                                    schema=bytes(schema.SerializeToString()))
+                                                    schema=bytes(schema.SerializeToString()), shards_num = shards_num)
 
     @classmethod
     def drop_collection_request(cls, collection_name):
@@ -363,6 +364,23 @@ class Prepare:
             insert_request.hash_keys.extend(hash_keys)
 
         return insert_request
+
+    @classmethod
+    def delete_request(cls, collection_name, partition_name, expr):
+        def check_str(input, prefix):
+            if (input == None):
+                raise ParamError(prefix + " cannot be None")
+            if (input == None) or (not isinstance(input, str)):
+                msg = prefix + " value {} is illegal"
+                raise ParamError(msg.format(input))
+
+        check_str(collection_name, "collection_name")
+        check_str(expr, "expr")
+
+        default_partition_name = "_default"  # should here?
+        partition_name = partition_name or default_partition_name
+        request = milvus_types.DeleteRequest(collection_name=collection_name, expr = expr, partition_name=partition_name)
+        return request
 
     @classmethod
     def _prepare_placeholders(cls, vectors, nq, max_nq_per_batch, tag, pl_type, is_binary, dimension=0):
@@ -833,10 +851,10 @@ class Prepare:
             m = p["metric"].upper()
             if vtype == _TYPE_FLOAT and (m not in metrics_f):
                 msg = "{} metric type is invalid for float vector"
-                raise ParamError(msg.format(m))
+                raise ParamError(msg.format(p["metric"]))
             if vtype == _TYPE_BIN and (m not in metrics_b):
                 msg = "{} metric type is invalid for binary vector"
-                raise ParamError(msg.format(m))
+                raise ParamError(msg.format(p["metric"]))
 
         postcheck_params(type_left, params)
         postcheck_params(type_right, params)
