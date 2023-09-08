@@ -12,6 +12,7 @@
 
 import json
 import logging
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -26,17 +27,20 @@ from .constants import (
     DYNAMIC_FIELD_NAME,
     NUMPY_TYPE_CREATOR,
     BulkFileType,
+    MB
 )
 
 logger = logging.getLogger("bulk_buffer")
 logger.setLevel(logging.DEBUG)
 
+MAX_SPOOL_FILE_SIZE = 512 * MB
+
 
 class Buffer:
     def __init__(
-        self,
-        schema: CollectionSchema,
-        file_type: BulkFileType = BulkFileType.NPY,
+            self,
+            schema: CollectionSchema,
+            file_type: BulkFileType = BulkFileType.NPY,
     ):
         self._buffer = {}
         self._fields = {}
@@ -85,7 +89,84 @@ class Buffer:
         if DYNAMIC_FIELD_NAME in self._buffer:
             self._buffer[DYNAMIC_FIELD_NAME].append(json.dumps(dynamic_values))
 
-    def persist(self, local_path: str) -> list:
+    @property
+    def file_type(self):
+        return self._file_type
+
+    def persist_file_obj(self) -> list(tuple):
+        self._verify()
+
+        # output files
+        if self._file_type == BulkFileType.NPY:
+            return self._persist_npy_file_obj()
+        if self._file_type == BulkFileType.JSON_RB:
+            return self._persist_json_file_obj()
+
+        self._throw(f"Unsupported file tpye: {self._file_type}")
+        return []
+
+    def _persist_npy_file_obj(self):
+        file_list = []
+        ret = []
+        for k in self._buffer:
+            file_name = k
+            file_list.append(file_name)
+            try:
+                dt = None
+                field_schema = self._fields[k]
+                if field_schema.dtype.name in NUMPY_TYPE_CREATOR:
+                    dt = NUMPY_TYPE_CREATOR[field_schema.dtype.name]
+
+                # for JSON field, convert to string array
+                if field_schema.dtype == DataType.JSON:
+                    str_arr = []
+                    for val in self._buffer[k]:
+                        str_arr.append(json.dumps(val))
+                    self._buffer[k] = str_arr
+
+                arr = np.array(self._buffer[k], dtype=dt)
+                tmp = tempfile.SpooledTemporaryFile(max_size=MAX_SPOOL_FILE_SIZE)
+                np.save(tmp, arr)
+                tmp.seek(0)
+                ret.append(file_name, tmp)
+            except Exception as e:
+                self._throw(f"Failed to persist SpooledTemporaryFile (column-based) {file_name}, error: {e}")
+
+            logger.info(f"Successfully persist SpooledTemporaryFile (column-based) {file_name}")
+
+        if len(file_list) != len(self._buffer):
+            logger.error("Some of fields were not persisted successfully, abort the files")
+            file_list.clear()
+            self._throw("Some of fields were not persisted successfully, abort the files")
+
+        return ret
+
+    def _persist_json_file_obj(self):
+        rows = []
+        row_count = len(next(iter(self._buffer.values())))
+        row_index = 0
+        while row_index < row_count:
+            row = {}
+            for k, v in self._buffer.items():
+                row[k] = v[row_index]
+            rows.append(row)
+            row_index = row_index + 1
+
+        data = {
+            "rows": rows,
+        }
+
+        tmp = tempfile.SpooledTemporaryFile(max_size=MAX_SPOOL_FILE_SIZE)
+        try:
+            json.dump(data, tmp, indent=2)
+        except Exception as e:
+            self._throw(f"Failed to persist row-based json file, error: {e}")
+
+        logger.info(f"Successfully persist row-based json file")
+        tmp.seek(0)
+        return [("", tmp)]
+
+    def _verify(self):
         # verify row count of fields are equal
         row_count = -1
         for k in self._buffer:
@@ -98,11 +179,14 @@ class Buffer:
                     )
                 )
 
+    def persist(self, local_path: str) -> list:
+        self._verify()
+
         # output files
         if self._file_type == BulkFileType.NPY:
             return self._persist_npy(local_path)
         if self._file_type == BulkFileType.JSON_RB:
-            return self._persist_json_rows(local_path)
+            return self._persist_json(local_path)
 
         self._throw(f"Unsupported file tpye: {self._file_type}")
         return []
@@ -145,7 +229,7 @@ class Buffer:
 
         return file_list
 
-    def _persist_json_rows(self, local_path: str):
+    def _persist_json(self, local_path: str):
         rows = []
         row_count = len(next(iter(self._buffer.values())))
         row_index = 0

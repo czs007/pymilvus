@@ -24,6 +24,9 @@ GB = 1024 * MB
 DYNAMIC_FIELD_NAME = "$meta"
 DEFAULT_BUCKET_NAME = "a-bucket"
 
+JSON_SUFFIX = ".json"
+NUMPY_SUFFIX = ".npy"
+
 TYPE_SIZE = {
     DataType.BOOL.name: 1,
     DataType.INT8.name: 8,

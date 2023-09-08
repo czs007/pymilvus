@@ -11,7 +11,8 @@
 # the License.
 
 import logging
-import sys
+import os
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,27 +23,29 @@ from pymilvus.orm.schema import CollectionSchema
 
 from .constants import (
     DEFAULT_BUCKET_NAME,
-    MB,
+    BulkFileType,
+    JSON_SUFFIX, NUMPY_SUFFIX
 )
-from .local_bulk_writer import LocalBulkWriter
+
+from .bulk_writer import BulkWriter
 
 logger = logging.getLogger("remote_bulk_writer")
 logger.setLevel(logging.DEBUG)
 
 
-class RemoteBulkWriter(LocalBulkWriter):
+class RemoteBulkWriter(BulkWriter):
     class ConnectParam:
         def __init__(
-            self,
-            bucket_name: str = DEFAULT_BUCKET_NAME,
-            endpoint: Optional[str] = None,
-            access_key: Optional[str] = None,
-            secret_key: Optional[str] = None,
-            secure: bool = False,
-            session_token: Optional[str] = None,
-            region: Optional[str] = None,
-            http_client: Any = None,
-            credentials: Any = None,
+                self,
+                bucket_name: str = DEFAULT_BUCKET_NAME,
+                endpoint: Optional[str] = None,
+                access_key: Optional[str] = None,
+                secret_key: Optional[str] = None,
+                secure: bool = False,
+                session_token: Optional[str] = None,
+                region: Optional[str] = None,
+                http_client: Any = None,
+                credentials: Any = None,
         ):
             self._bucket_name = bucket_name
             self._endpoint = endpoint
@@ -55,26 +58,18 @@ class RemoteBulkWriter(LocalBulkWriter):
             self._credentials = (credentials,)  # minio.credentials.Provider
 
     def __init__(
-        self,
-        schema: CollectionSchema,
-        remote_path: str,
-        connect_param: ConnectParam,
-        segment_size: int = 512 * MB,
+            self,
+            connect_param: ConnectParam,
+            schema: CollectionSchema,
+            data_path: str,
+            file_type: BulkFileType = BulkFileType.NPY,
+            **kwargs,
     ):
-        local_path = Path(sys.argv[0]).resolve().parent.joinpath("bulk_writer")
-        super().__init__(schema, str(local_path), segment_size)
-        self._remote_path = Path("/").joinpath(remote_path).joinpath(super().uuid)
+        super().__init__(schema, str(data_path), file_type, **kwargs)
         self._connect_param = connect_param
         self._client = None
         self._get_client()
-        self._remote_files = []
-        logger.info(f"Remote buffer writer initialized, target path: {self._remote_path}")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object):
-        super().__exit__(exc_type, exc_val, exc_tb)
+        logger.info(f"Remote buffer writer initialized, target path: {self._data_path}")
 
     def _get_client(self):
         try:
@@ -99,11 +94,8 @@ class RemoteBulkWriter(LocalBulkWriter):
             logger.error(f"Failed to connect MinIO/S3, error: {err}")
             raise
 
-    def append_row(self, row: dict, **kwargs):
-        super().append_row(row, **kwargs)
-
     def commit(self, **kwargs):
-        super().commit(call_back=self._upload)
+        super().commit(target=self._upload, **kwargs)  # reset the buffer size
 
     def _remote_exists(self, file: str) -> bool:
         try:
@@ -115,17 +107,22 @@ class RemoteBulkWriter(LocalBulkWriter):
             self._throw(f"Failed to stat MinIO/S3 object, error: {err}")
         return True
 
-    def _local_rm(self, file: str):
-        try:
-            Path(file).unlink()
-            parent_dir = Path(file).parent
-            if not any(Path(parent_dir).iterdir()):
-                Path(parent_dir).rmdir()
-                logger.info(f"Delete empty directory '{parent_dir!s}'")
-        except Exception:
-            logger.warning(f"Failed to delete local file: {file}")
+    def _upload(self, call_back: Optional[Callable] = None):
+        self._working_thread[threading.current_thread().name] = threading.current_thread()
+        target_path = self._data_path
+        if self._flush_count:
+            target_path = Path.joinpath(self._data_path, str(self._flush_count))
 
-    def _upload(self, file_list: list):
+        self._flush_count = self._flush_count + 1
+
+        old_buffer = super()._new_buffer()
+        file_list = old_buffer.persist_file_obj()
+        suffix = ".json"
+        if old_buffer.file_type == BulkFileType.NPY:
+            suffix = ".npy"
+        else:
+            file_list = [target_path, file_list[1]]
+
         remote_files = []
         try:
             logger.info("Prepare to upload files")
@@ -134,41 +131,30 @@ class RemoteBulkWriter(LocalBulkWriter):
             if not found:
                 self._throw(f"MinIO bucket '{self._connect_param._bucket_name}' doesn't exist")
 
-            for file_path in file_list:
-                ext = Path(file_path).suffix
-                if ext not in {".json", ".npy"}:
-                    continue
-
-                relative_file_path = str(file_path).replace(str(super().data_path), "")
-                minio_file_path = str(
-                    Path.joinpath(self._remote_path, relative_file_path.lstrip("/"))
-                )
-
+            for file_path, file in file_list:
+                minio_file_path = file_path + suffix
                 if self._remote_exists(minio_file_path):
                     logger.info(
                         f"Remote file '{minio_file_path}' already exists, will overwrite it"
                     )
 
-                minio_client.fput_object(
-                    bucket_name=self._connect_param._bucket_name,
-                    object_name=minio_file_path,
-                    file_path=file_path,
+                file.seek(0, os.SEEK_END)
+                file_size = file.tell()
+                file.seek(0)
+                minio_client.put_object(
+                    self._connect_param._bucket_name,
+                    minio_file_path,
+                    file,
+                    file_size,
                 )
-                logger.info(f"Upload file '{file_path}' to '{minio_file_path}'")
+                logger.info(f"Upload file '{file_path}' to '{self.data_path}'")
 
                 remote_files.append(str(minio_file_path))
-                self._local_rm(file_path)
         except Exception as e:
             self._throw(f"Failed to call MinIO/S3 api, error: {e}")
 
         logger.info(f"Successfully upload files: {file_list}")
-        self._remote_files.append(remote_files)
+        self._output_files.extend(remote_files)
+        if call_back:
+            call_back(file_list)
         return remote_files
-
-    @property
-    def data_path(self):
-        return self._remote_path
-
-    @property
-    def batch_files(self):
-        return self._remote_files
