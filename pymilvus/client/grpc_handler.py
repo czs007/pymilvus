@@ -1056,7 +1056,7 @@ class GrpcHandler:
         )
 
     @retry_on_rpc_failure()
-    def release_collection(self, collection_name: str, timeout: Optional[float] = None):
+    def release_collection(self, collection_name: str, timeout: Optional[float] = None, **kwargs):
         check_pass_param(collection_name=collection_name)
         request = Prepare.release_collection("", collection_name)
         rf = self._stub.ReleaseCollection.future(request, timeout=timeout)

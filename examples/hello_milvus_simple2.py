@@ -17,6 +17,16 @@ client.create_collection_with_schema(collection_name, schema, index_param)
 info = client.describe_collection(collection_name)
 print(f"{collection_name}'s info:{info}")
 
+client.release_collection(collection_name)
+
+client.drop_index(collection_name, field_name="embedding")
+
+index_param2 = client.prepare_index_params("embeddings",
+        index_type="HNSW",
+        metric_type="IP", index_name="my_index",
+        params={"efConstruction": 8, "M":20})
+client.create_index(collection_name, index_param2)
+
 rng = np.random.default_rng(seed=19530)
 rows = [
     {"title": "The Catcher in the Rye", "embeddings": rng.random((1, dimension))[0], "a":1,},
@@ -29,6 +39,13 @@ rows = [
 client.insert(collection_name, rows)
 client.insert(collection_name,
         {"title": "The Great Gatsby", "embeddings": rng.random((1, dimension))[0]})
+
+
+client.load_collection(collection_name)
+
+progress = client.loading_progress(collection_name)
+print("loading progress:", progress)
+
 
 search_vec = rng.random((1, dimension))
 result = client.search(collection_name, search_vec, limit=3, output_fields=["title"])

@@ -9,7 +9,7 @@ dim = 8
 collection_name = "hello_milvus"
 milvus_client = MilvusClient("http://localhost:19530")
 milvus_client.drop_collection(collection_name)
-milvus_client.create_collection(collection_name, dim, consistency_level="Bounded", metric_type="L2", auto_id=True)
+milvus_client.create_collection(collection_name, dim, consistency_level="Strong", metric_type="L2", auto_id=True)
 
 print("collections:", milvus_client.list_collections())
 print(f"{collection_name} :", milvus_client.describe_collection(collection_name))
