@@ -1407,23 +1407,14 @@ def prepare_fields_from_dataframe(df: pd.DataFrame):
 
 
 def check_schema(schema: CollectionSchema):
+    # Whether a collection needs a vector field is decided by the server: since
+    # Milvus 3.0 a collection may be created without one (every operation
+    # except search works on it), and older servers reject such a schema with
+    # their own error. The client only checks that a schema with fields exists.
     if schema is None:
         raise SchemaNotReadyException(message=ExceptionsMessage.NoSchema)
     if len(schema.fields) < 1:
         raise SchemaNotReadyException(message=ExceptionsMessage.EmptySchema)
-    vector_fields = []
-    for field in schema.fields:
-        if field.dtype in (
-            DataType.FLOAT_VECTOR,
-            DataType.BINARY_VECTOR,
-            DataType.FLOAT16_VECTOR,
-            DataType.BFLOAT16_VECTOR,
-            DataType.SPARSE_FLOAT_VECTOR,
-            DataType.INT8_VECTOR,
-        ):
-            vector_fields.append(field.name)
-    if len(vector_fields) < 1:
-        raise SchemaNotReadyException(message=ExceptionsMessage.NoVector)
 
 
 def infer_default_value_bydata(data: Any, dtype: DataType = None):

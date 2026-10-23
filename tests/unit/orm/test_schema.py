@@ -1802,12 +1802,11 @@ class TestCheckSchema:
             check_schema(schema)
 
     def test_check_schema_no_vector(self):
-        """Test schema without vector field."""
+        """A schema without a vector field is accepted on the client; the server decides."""
         schema = CollectionSchema(
             [FieldSchema("id", DataType.INT64, is_primary=True)], check_fields=False
         )
-        with pytest.raises(SchemaNotReadyException, match=r"[Vv]ector"):
-            check_schema(schema)
+        check_schema(schema)
 
 
 class TestPrepareFieldsFromDataframe:
